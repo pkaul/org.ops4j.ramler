@@ -1,9 +1,6 @@
 package org.ops4j.ramler.generator;
 
-import com.sun.codemodel.JDefinedClass;
-import com.sun.codemodel.JFieldVar;
-import com.sun.codemodel.JMethod;
-import com.sun.codemodel.JType;
+import com.sun.codemodel.*;
 import org.junit.Test;
 
 import java.util.List;
@@ -51,12 +48,6 @@ public class FluentSetterTest extends AbstractGeneratorTest {
         assertProperty(klass, "colleagues", "List<Employee>", "getColleagues", "setColleagues");
         assertFluentSetter(klass, "List<Employee>", "withColleagues");
 
-
-        // expect inherited fields to be added as well
-        assertFluentSetter(klass, "String", "withFirstName");
-        assertFluentSetter(klass, "String", "withLastName");
-        assertFluentSetter(klass,  "int", "withDuplicateProperty");
-
         // expect read only fields / getter available but that there is NO fluent setter
         assertFieldAvailable("DISCRIMINATOR", "String");
         assertGetterAvailable("getObjectType", "String");
@@ -86,7 +77,7 @@ public class FluentSetterTest extends AbstractGeneratorTest {
         assertThat(methods).hasSize(1);
         JMethod method = methods.get(0);
         
-        assertThat(method.type()).isEqualTo(klass);
+        assertThat(method.type().getClass()).isEqualTo(JTypeVar.class);
         assertThat(method.params().size()).isEqualTo(1);
         assertThat(method.params().get(0).type().name()).isEqualTo(typeName);
 

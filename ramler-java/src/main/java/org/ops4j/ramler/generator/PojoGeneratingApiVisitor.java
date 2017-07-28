@@ -24,6 +24,7 @@ import static org.ops4j.ramler.generator.Constants.TYPE_VAR;
 import static org.ops4j.ramler.generator.Constants.TYPE_VARS;
 import static org.ops4j.ramler.generator.Constants.VALUE;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -57,6 +58,7 @@ import com.sun.codemodel.JMod;
 import com.sun.codemodel.JPackage;
 import com.sun.codemodel.JType;
 import com.sun.codemodel.JVar;
+import com.sun.codemodel.JTypeVar;
 
 /**
  * API visitor adding the members to each POJO class created by {@code PojoCreatingApiVisitor}.
@@ -107,7 +109,9 @@ public class PojoGeneratingApiVisitor implements ApiVisitor {
             return;
         }
         JDefinedClass klass = pkg._getClass(type.name());
-        addFluentSetters(klass, type);
+        if( this.context.getConfig().isFluentSetters() ) {
+            addFluentSetters(klass);
+        }
     }
 
     private void addJavadoc(JDefinedClass klass, ObjectTypeDeclaration type) {
@@ -195,33 +199,6 @@ public class PojoGeneratingApiVisitor implements ApiVisitor {
 
     private void addMixinProperties(JDefinedClass klass, ObjectTypeDeclaration type) {
         type.parentTypes().stream().skip(1).forEach(p -> addMixinPropertiesFromParent(klass, p));
-    }
-
-    private void addFluentSetters(JDefinedClass klass, ObjectTypeDeclaration type) {
-        if( context.getConfig().isFluentSetters() ) {
-
-            String discriminator = type.discriminator();
-
-            // add fluent setters for ACTUAL class properties as well as properties from INHERITED
-            // This is because fluent api breaks when parent types simply return current object as their type
-            // rather than as current type
-            for (TypeDeclaration property : type.properties()) {
-                String propertyName = Names.buildVariableName(property);
-                JType propertyType = context.getJavaType(property);
-
-                if( hasSetter(propertyName, discriminator) ) {
-                    generateFluentSetter(klass, propertyType, propertyName);
-                }
-            }
-        }
-    }
-
-    /**
-     * Checks whether given property is "writable" ans has a setter. This is currently hacked a little bit
-     * by checking whether property is the discriminator which is not writable
-     */
-    private boolean hasSetter(String propertyName, String discriminatorName) {
-        return !propertyName.equals(discriminatorName);
     }
 
     private void addMixinPropertiesFromParent(JDefinedClass klass, TypeDeclaration parentType) {
@@ -403,16 +380,62 @@ public class PojoGeneratingApiVisitor implements ApiVisitor {
     }
 
     /**
-     * Generates a fluent setter, e.g. "ClassType withPropertyName(PropertyType value)"
+     * Generates fluent setters, e.g. "ClassType withPropertyName(PropertyType value)"  for every
+     * setter method that is found in given class
      */
-    private void generateFluentSetter(JDefinedClass klass, JType fieldType, String fieldName) {
+    private void addFluentSetters(JDefinedClass klass) {
 
-        JMethod method = klass.method(JMod.PUBLIC, klass, getFluentSetterName(fieldName));
-        JVar valueParameter = method.param(fieldType, fieldName);
-        // call "setter" with value from this method's parameter
-        method.body().invoke(getSetterName(fieldName)).arg(valueParameter);
-        // return "this"
-        method.body()._return(JExpr._this());
+        // we need to generify fluent setter's return type so that this also work with inheritance
+        //   see https://stackoverflow.com/questions/14105275/fluent-setters-with-inheritance-in-java
+        if( klass._extends() instanceof JDefinedClass ) {
+            klass._extends(klass._extends().narrow(klass));
+        }
+        JTypeVar t = klass.generify(findAvailableTypeVarName(klass)).bound(klass);
+
+        List<JMethod> methods = new ArrayList<>(klass.methods());
+        for( JMethod m : methods ) {
+
+            // is method a setter?
+            if( m.name().startsWith("set") && m.params().size() == 1 ) {
+                
+                // create method ...
+                String fluentSetterName =  this.context.getConfig().getFluentSetterPrefix()+m.name().substring(3);
+                JMethod method = klass.method(JMod.PUBLIC, klass, fluentSetterName);
+
+                // ... with same parameter than used for setter and ...
+                JVar valueParameter = method.param(m.params().get(0).type(), m.params().get(0).name());
+
+                // ... with @SuppressWarnings("unchecked")
+                method.annotate(SuppressWarnings.class).param("value", "unchecked");
+
+                // call original "setter" with value from this method's parameter
+                method.body().invoke(m).arg(valueParameter);
+                // return "this" (casted to generic type)
+                method.body()._return(JExpr._this());
+            }
+        }
+    }
+
+    private String findAvailableTypeVarName(JDefinedClass klass) {
+
+        for( char c = 'Z'; c >= 'A' ; c--) {
+
+            String result = Character.toString(c);
+            for( JTypeVar v : klass.typeParams() ) {
+
+                if(v.name().equals(result) ) {
+                    // already occupied
+                    result = null;
+                    break;
+                }
+            }
+
+            if( result != null ) {
+                return result;
+            }
+        }
+
+        throw new IllegalStateException("No available type var name found");
     }
 
     private void generateBooleanFieldAndAccessors(JDefinedClass klass,
@@ -446,10 +469,6 @@ public class PojoGeneratingApiVisitor implements ApiVisitor {
 
     private String getSetterName(String fieldName) {
         return getAccessorName("set", fieldName);
-    }
-
-    private String getFluentSetterName(String fieldName) {
-        return getAccessorName(context.getConfig().getFluentSetterPrefix(), fieldName);
     }
 
     private String getAccessorName(String prefix, String fieldName) {

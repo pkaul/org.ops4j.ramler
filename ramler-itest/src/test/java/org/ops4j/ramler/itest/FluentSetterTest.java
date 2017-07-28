@@ -28,7 +28,7 @@ public class FluentSetterTest {
     @Test
     public void testFluentSettersForInherited() {
 
-        Employee employee = new Employee().withAge(12).withDepartment("My Department");
+        Employee employee = new Employee<>().withAge(12).withDepartment("My Department");
         assertThat(employee.getAge()).isEqualTo(12);
         assertThat(employee.getDepartment()).isEqualTo("My Department");
     }
